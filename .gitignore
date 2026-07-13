@@ -1,20 +1,29 @@
-# Local credential files (Contains your API Key)
+# Local environment credentials and keys
 .env
-
-# Application configurations
 config.json
 
-# Local tracking database
+# Python bytecode and temporary caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+ENV/
+
+# OS-generated file clutter
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# App-specific staging and local storage paths (DO NOT UPLOAD THESE)
+web/staging/*
+!web/staging/.gitkeep
+
+# Sensitive Selenium automated browser data profiles
+database/selenium_chrome_profile/
 database/tracker.db
 
-# Heavy Selenium browser binaries, cookies, and active login sessions
-database/selenium_chrome_profile/
-
-# Staging area directories (where media is duplicated)
-D:/IG_Dump_Staging/
-
-# Python caching footprints
-__pycache__/
-*.pyc
-.pytest_cache/
+# VS Code environment preferences
 .vscode/
+.idea/
