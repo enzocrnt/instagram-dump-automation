@@ -1,5 +1,6 @@
-let currentPool = [];
+let currentPool = [];       
 let standbyBatches = [];
+let dragSrcElement = null;  
 
 const MONTH_ABBREVIATIONS = {
     "January": "Jan.", "February": "Feb.", "March": "Mar.", "April": "Apr.",
@@ -10,66 +11,124 @@ const MONTH_ABBREVIATIONS = {
 const daySelect = document.getElementById('daySelect');
 for (let i = 1; i <= 31; i++) {
     let opt = document.createElement('option');
-    opt.value = i;
-    opt.innerText = i;
+    opt.value = i; opt.innerText = i;
     daySelect.appendChild(opt);
 }
 
 document.getElementById('btnReroll').addEventListener('click', triggerPoolReroll);
 document.getElementById('btnSave').addEventListener('click', saveToStandbyQueue);
-document.getElementById('monthSelect').addEventListener('change', triggerPoolReroll);
-document.getElementById('daySelect').addEventListener('change', triggerPoolReroll);
+document.getElementById('monthSelect').addEventListener('change', () => triggerPoolReroll(false));
+document.getElementById('daySelect').addEventListener('change', () => triggerPoolReroll(false));
 
-async function triggerPoolReroll() {
+document.getElementById('btnNextDate').addEventListener('click', () => shiftDateStep(1));
+document.getElementById('btnPrevDate').addEventListener('click', () => shiftDateStep(-1));
+
+function shiftDateStep(direction) {
+    let day = parseInt(daySelect.value);
+    let monthIdx = document.getElementById('monthSelect').selectedIndex;
+    
+    day += direction;
+    
+    if (day > 31) {
+        day = 1;
+        monthIdx = (monthIdx + 1) % 12;
+    } else if (day < 1) {
+        day = 31;
+        monthIdx = (monthIdx - 1 + 12) % 12;
+    }
+    
+    document.getElementById('monthSelect').selectedIndex = monthIdx;
+    daySelect.value = day;
+    triggerPoolReroll(false); 
+}
+
+async function triggerPoolReroll(isRerollAction = true) {
     const month = document.getElementById('monthSelect').value;
     const day = document.getElementById('daySelect').value;
     
-    currentPool = await eel.python_reroll_day_pool(month, day)();
+    let lockedFiles = [];
+    if (isRerollAction) {
+        lockedFiles = currentPool.filter(item => item.locked).map(item => item.name);
+    }
     
+    const backendPayload = await eel.python_reroll_day_pool(month, day, lockedFiles)();
+    
+    currentPool = backendPayload.map(fileObject => {
+        const wasLocked = lockedFiles.includes(fileObject.filename);
+        return { name: fileObject.filename, locked: wasLocked };
+    });
+    
+    renderGalleryDeckGrid();
+}
+
+function renderGalleryDeckGrid() {
     const container = document.getElementById('galleryContainer');
     container.innerHTML = '';
     
-    currentPool.forEach((imgName) => {
+    currentPool.forEach((item, index) => {
         const wrapper = document.createElement('div');
-        wrapper.className = 'thumb-block d-flex align-items-center justify-content-center overflow-hidden';
-        wrapper.style.backgroundColor = '#121212';
+        wrapper.className = `thumb-block overflow-hidden ${item.locked ? 'locked' : ''}`;
+        wrapper.setAttribute('draggable', 'true');
+        wrapper.setAttribute('data-index', index);
+        
+        wrapper.addEventListener('dragstart', handleDragStart);
+        wrapper.addEventListener('dragover', handleDragOver);
+        wrapper.addEventListener('drop', handleDrop);
+        wrapper.addEventListener('dragend', handleDragEnd);
+        
+        wrapper.addEventListener('click', (e) => {
+            if (e.target.tagName === 'IMG' || e.target === wrapper) {
+                item.locked = !item.locked;
+                renderGalleryDeckGrid();
+            }
+        });
         
         const img = document.createElement('img');
-        img.src = `staging/${imgName}`;
-        img.style.width = '100%';
-        img.style.height = '100%';
-        img.style.objectFit = 'cover';
+        img.src = `staging/${item.name}`;
+        img.style.width = '100%'; img.style.height = '100%'; img.style.objectFit = 'cover';
         
         wrapper.appendChild(img);
+        
+        if (item.locked) {
+            const badge = document.createElement('div');
+            badge.className = 'lock-badge';
+            badge.innerText = 'LOCKED';
+            wrapper.appendChild(badge);
+        }
+        
         container.appendChild(wrapper);
     });
 }
 
-function generateAutoCaption(month, day) {
-    const abbrev = MONTH_ABBREVIATIONS[month] || month;
-    return `${abbrev} ${day}, 2024`;
+function handleDragStart(e) {
+    this.classList.add('dragging');
+    dragSrcElement = this;
+    e.dataTransfer.effectAllowed = 'move';
+}
+function handleDragOver(e) {
+    if (e.preventDefault) e.preventDefault();
+    return false;
+}
+function handleDrop(e) {
+    if (e.stopPropagation) e.stopPropagation();
+    
+    if (dragSrcElement !== this) {
+        const fromIdx = parseInt(dragSrcElement.getAttribute('data-index'));
+        const toIdx = parseInt(this.getAttribute('data-index'));
+        
+        const targetElement = currentPool.splice(fromIdx, 1)[0];
+        currentPool.splice(toIdx, 0, targetElement);
+        
+        renderGalleryDeckGrid();
+    }
+    return false;
+}
+function handleDragEnd() {
+    this.classList.remove('dragging');
 }
 
-// NEW: Scans your hard drive on boot and loads anything left un-uploaded
-async function loadSavedBatchesFromDisk() {
-    const discovered = await eel.python_load_existing_staged_batches()();
-    
-    discovered.forEach(batch => {
-        // Break up recovered text to generate captions automatically
-        const parts = batch.dateDisplay.split(" ");
-        const month = parts[0];
-        const day = parts[1];
-        const computedCaption = generateAutoCaption(month, day);
-        
-        standbyBatches.push({
-            folderKey: batch.folderKey,
-            dateDisplay: batch.dateDisplay,
-            count: batch.count,
-            caption: computedCaption
-        });
-    });
-    
-    renderStandbyQueue();
+function generateAutoCaption(month, day) {
+    return `${MONTH_ABBREVIATIONS[month] || month} ${day}, 2024`;
 }
 
 async function saveToStandbyQueue() {
@@ -77,19 +136,21 @@ async function saveToStandbyQueue() {
 
     const month = document.getElementById('monthSelect').value;
     const day = document.getElementById('daySelect').value;
+    
+    const orderedFilenames = currentPool.map(item => item.name);
 
-    const activeFolderName = await eel.python_save_to_standby(month, day, currentPool)();
+    const activeFolderName = await eel.python_save_to_standby(month, day, orderedFilenames)();
     const defaultCaption = generateAutoCaption(month, day);
 
     standbyBatches.push({
         folderKey: activeFolderName,
         dateDisplay: `${month} ${day}`,
-        count: currentPool.length,
+        count: orderedFilenames.length,
         caption: defaultCaption
     });
 
     renderStandbyQueue();
-    autoAdvanceDate();
+    shiftDateStep(1); 
 }
 
 function renderStandbyQueue() {
@@ -104,13 +165,15 @@ function renderStandbyQueue() {
     standbyBatches.forEach(batch => {
         const card = document.createElement('div');
         card.className = 'queue-card p-3 mb-3 d-flex align-items-start justify-content-between';
-        
         card.innerHTML = `
             <div style="width: 45%;">
-                <h6 class="mb-1 small fw-bold" style="color: #0095F6; text-transform: none; font-family: monospace;">${batch.folderKey}</h6>
+                <h6 class="mb-1 small fw-bold" style="color: #0095F6; font-family: monospace;">${batch.folderKey}</h6>
                 <div class="text-white-50 small mb-1">Source: ${batch.dateDisplay}</div>
-                <div class="small text-white-50">${batch.count} files logged</div>
-                <button class="btn btn-primary btn-sm mt-3 w-100 fw-bold ig-btn-primary" onclick="deployBatch('${batch.folderKey}')">🚀 Upload</button>
+                <div class="small text-white-50 mb-3">${batch.count} files logged</div>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-primary btn-sm fw-bold ig-btn-primary flex-grow-1" onclick="deployBatch('${batch.folderKey}')">Upload</button>
+                    <button class="btn btn-outline-danger btn-sm fw-bold" style="padding: 0.25rem 0.5rem;" onclick="removeBatchFromPipeline('${batch.folderKey}')">Remove</button>
+                </div>
             </div>
             <div class="flex-grow-1 ms-3">
                 <label class="text-white-50 small mb-1">Manual Caption Input:</label>
@@ -126,35 +189,47 @@ function syncCaptionText(folderKey, value) {
     if (batch) batch.caption = value;
 }
 
+// New handler function to strip a batch folder off the UI and hard drive storage layout
+async function removeBatchFromPipeline(folderKey) {
+    const confirmed = await eel.python_delete_batch_folder(folderKey)();
+    if (confirmed) {
+        const batchIndex = standbyBatches.findIndex(b => b.folderKey === folderKey);
+        if (batchIndex !== -1) {
+            standbyBatches.splice(batchIndex, 1);
+            renderStandbyQueue();
+        }
+    }
+}
+
 async function deployBatch(folderKey) {
     const batchIndex = standbyBatches.findIndex(b => b.folderKey === folderKey);
     if (batchIndex === -1) return;
     
     const batch = standbyBatches[batchIndex];
-    
     let success = await eel.python_upload_batch(batch.folderKey, batch.caption)();
     if (success) {
-        standbyBatches.splice(batchIndex, 1);
-        renderStandbyQueue();
+        standbyBatches.splice(batchIndex, 1); // <--- This line removes it from the queue array
+        renderStandbyQueue();                 // <--- This line redraws the UI without it
     }
 }
 
-function autoAdvanceDate() {
-    let day = parseInt(daySelect.value);
-    if (day < 31) {
-        daySelect.value = day + 1;
-    } else {
-        daySelect.value = 1;
-        let monthIdx = document.getElementById('monthSelect').selectedIndex;
-        document.getElementById('monthSelect').selectedIndex = (monthIdx + 1) % 12;
-    }
-    triggerPoolReroll();
+async function loadSavedBatchesFromDisk() {
+    const discovered = await eel.python_load_existing_staged_batches()();
+    discovered.forEach(batch => {
+        const parts = batch.dateDisplay.split(" ");
+        const computedCaption = generateAutoCaption(parts[0], parts[1]);
+        standbyBatches.push({
+            folderKey: batch.folderKey,
+            dateDisplay: batch.dateDisplay,
+            count: batch.count,
+            caption: computedCaption
+        });
+    });
+    renderStandbyQueue();
 }
 
-// Boot Initialization Setup
 async function init() {
-    await triggerPoolReroll();
-    await loadSavedBatchesFromDisk(); // Triggers scan check on launch
+    await triggerPoolReroll(false);
+    await loadSavedBatchesFromDisk();
 }
-
 init();

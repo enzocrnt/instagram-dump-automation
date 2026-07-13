@@ -4,10 +4,8 @@ import shutil
 import glob
 import random
 
-# Import your native Selenium engine from your source directory files
 from src.uploader import upload_photo_carousel as execute_browser_upload
 
-# Base path configurations shifted entirely to your internal hard drive (D:)
 ARCHIVE_BASE_DIR = r"D:\2024_Backup"
 STAGING_DIR = os.path.join(os.path.dirname(__file__), 'web', 'staging')
 VAULT_DIR = r"D:\IG_Dump_Staging" 
@@ -27,57 +25,64 @@ MONTH_NUM_MAP = {
     "September": "09", "October": "10", "November": "11", "December": "12"
 }
 
-# Reverse mapping to turn folder digits back into human-readable text for the UI
 REV_MONTH_MAP = {v: k for k, v in MONTH_NUM_MAP.items()}
 
 eel.init('web')
 
-def clear_staging_directory():
-    """Removes any stale images inside the web staging area to save space."""
-    if os.path.exists(STAGING_DIR):
-        shutil.rmtree(STAGING_DIR)
-    os.makedirs(STAGING_DIR, exist_ok=True)
-
 @eel.expose
-def python_reroll_day_pool(month, day):
-    """Isolates files matching the exact selected date string and stages them."""
-    clear_staging_directory()
-    
+def python_reroll_day_pool(month, day, locked_filenames):
+    """Scrapes files matching date context, leaving locked files completely intact."""
     folder_name = MONTH_FOLDER_MAP.get(month)
     month_digits = MONTH_NUM_MAP.get(month)
     day_digits = f"{int(day):02d}"
     
     target_pics_path = os.path.join(ARCHIVE_BASE_DIR, folder_name, "Pics")
-    
     if not os.path.exists(target_pics_path):
         print(f"[Error] Directory not found: {target_pics_path}")
         return []
         
     search_pattern = f"IMG_2024{month_digits}{day_digits}_*.jpg"
-    full_search_string = os.path.join(target_pics_path, search_pattern)
-    matched_file_paths = glob.glob(full_search_string)
-    
+    matched_file_paths = glob.glob(os.path.join(target_pics_path, search_pattern))
     if not matched_file_paths:
         return []
 
-    random.shuffle(matched_file_paths)
-    final_selection_pool = matched_file_paths[:10]
+    all_available_basenames = [os.path.basename(p) for p in matched_file_paths]
+    candidate_pool = [name for name in all_available_basenames if name not in locked_filenames]
+    random.shuffle(candidate_pool)
     
-    staged_filenames = []
-    for file_path in final_selection_pool:
-        filename = os.path.basename(file_path)
-        destination = os.path.join(STAGING_DIR, filename)
-        try:
-            shutil.copy2(file_path, destination)
-            staged_filenames.append(filename)
-        except Exception as e:
-            print(f"[Error] Failed to stage file {filename}: {str(e)}")
-            
-    return staged_filenames
+    slots_needed = max(0, 10 - len(locked_filenames))
+    newly_selected_files = candidate_pool[:slots_needed]
+    final_filename_selection = list(locked_filenames) + newly_selected_files
+    
+    if os.path.exists(STAGING_DIR):
+        for f in os.listdir(STAGING_DIR):
+            if f not in final_filename_selection and f != ".gitkeep":
+                try:
+                    os.remove(os.path.join(STAGING_DIR, f))
+                except Exception:
+                    pass
+    else:
+        os.makedirs(STAGING_DIR, exist_ok=True)
+
+    staged_payload_response = []
+    for fname in final_filename_selection:
+        source_img_path = os.path.join(target_pics_path, fname)
+        dest_img_path = os.path.join(STAGING_DIR, fname)
+        
+        if os.path.exists(source_img_path) and not os.path.exists(dest_img_path):
+            try:
+                shutil.copy2(source_img_path, dest_img_path)
+            except Exception as e:
+                print(f"[Error] Failed to stage file {fname}: {str(e)}")
+                continue
+                
+        staged_payload_response.append({"filename": fname})
+        
+    return staged_payload_response
 
 @eel.expose
-def python_save_to_standby(month, day, filenames):
-    """Moves chosen files into an isolated folder named by its date prefix."""
+def python_save_to_standby(month, day, ordered_filenames):
+    """Saves the exact custom sorted thumbnail array sequence straight down to disk storage."""
     month_digits = MONTH_NUM_MAP.get(month)
     day_digits = f"{int(day):02d}"
     
@@ -93,58 +98,56 @@ def python_save_to_standby(month, day, filenames):
         
     os.makedirs(batch_vault_path, exist_ok=True)
     
-    vaulted_paths = []
-    for fname in filenames:
+    for index, fname in enumerate(ordered_filenames):
         source_file = os.path.join(STAGING_DIR, fname)
-        destination_file = os.path.join(batch_vault_path, fname)
+        indexed_filename = f"{index:02d}_{fname}"
+        destination_file = os.path.join(batch_vault_path, indexed_filename)
         
         if os.path.exists(source_file):
             shutil.copy2(source_file, destination_file)
-            vaulted_paths.append(destination_file)
             
-    print(f"[Vault Log] Locked down {len(vaulted_paths)} files into: {batch_vault_path}")
+    print(f"[Vault Log] Locked down drag-sorted files into: {batch_vault_path}")
     return folder_name
 
 @eel.expose
+def python_delete_batch_folder(folder_name):
+    """Purges a specific un-uploaded STAGED folder entirely from the internal drive staging vault."""
+    batch_vault_path = os.path.join(VAULT_DIR, folder_name)
+    if os.path.exists(batch_vault_path) and folder_name.startswith("STAGED_"):
+        try:
+            shutil.rmtree(batch_vault_path)
+            print(f"[Vault Log] Successfully deleted cancelled batch folder: {folder_name}")
+            return True
+        except Exception as e:
+            print(f"[Vault Error] Failed to delete batch folder {folder_name}: {str(e)}")
+            return False
+    return False
+
+@eel.expose
 def python_load_existing_staged_batches():
-    """Scans the hard drive directory for folders left un-uploaded and reconstructs the UI queue rows."""
     if not os.path.exists(VAULT_DIR):
         return []
         
     recovered_batches = []
-    # Search for any directories starting with STAGED_
-    search_path = os.path.join(VAULT_DIR, "STAGED_*")
-    
-    for folder_path in glob.glob(search_path):
+    for folder_path in glob.glob(os.path.join(VAULT_DIR, "STAGED_*")):
         if os.path.isdir(folder_path):
             folder_name = os.path.basename(folder_path)
-            
-            # Count the files inside this directory
             file_count = len(glob.glob(os.path.join(folder_path, "*.jpg")))
             
-            # Deconstruct the date from the folder name (e.g., STAGED_01-05-2024 -> 01, 05)
             try:
                 date_part = folder_name.split("STAGED_")[1].split("_")[0]
                 month_digits, day_digits, _ = date_part.split("-")
-                
-                month_name = REV_MONTH_MAP.get(month_digits, "January")
-                day_display = str(int(day_digits)) # Drop leading zero for text display
-                date_display = f"{month_name} {day_display}"
+                date_display = f"{REV_MONTH_MAP.get(month_digits, 'January')} {str(int(day_digits))}"
             except Exception:
                 date_display = "Unknown Date"
                 
             recovered_batches.append({
-                "folderKey": folder_name,
-                "dateDisplay": date_display,
-                "count": file_count
+                "folderKey": folder_name, "dateDisplay": date_display, "count": file_count
             })
-            
-    # Sort them so they line up in chronological order based on the folder string
     return sorted(recovered_batches, key=lambda x: x['folderKey'])
 
 @eel.expose
 def python_upload_batch(folder_name, caption):
-    """Launches the uploader routine targeting the folder name, renaming it to POSTED_ on success."""
     batch_vault_path = os.path.join(VAULT_DIR, folder_name)
     absolute_image_paths = sorted(glob.glob(os.path.join(batch_vault_path, "*.jpg")))
     
@@ -152,32 +155,22 @@ def python_upload_batch(folder_name, caption):
         print(f"[Error] No files found in vault for {folder_name} to upload.")
         return False
 
-    print(f"\n--- LAUNCHING AUTOMATION ENGINE FOR {folder_name} ---")
-    print(f"Absolute Image Payload: {absolute_image_paths}")
-    print(f"Caption Content to Inject: '{caption}'")
-    
+    print(f"\n--- EXECUTION DEPLOYMENT TRIGGERED FOR {folder_name} ---")
     try:
         upload_success = execute_browser_upload(absolute_image_paths, caption)
-        
         if upload_success:
             new_folder_name = folder_name.replace("STAGED_", "POSTED_")
             posted_vault_path = os.path.join(VAULT_DIR, new_folder_name)
-            
             if os.path.exists(posted_vault_path):
                 shutil.rmtree(posted_vault_path)
-                
             os.rename(batch_vault_path, posted_vault_path)
-            print(f"[Vault Log] Status updated successfully! Moved to: {posted_vault_path}")
             return True
-        else:
-            print(f"[Error] Selenium runner reported a failure during posting.")
-            return False
-            
+        return False
     except Exception as e:
-        print(f"[Error] System crash encountered during automated browser routine: {str(e)}")
+        print(f"[Error] System runtime crash encountered: {str(e)}")
         return False
 
 if __name__ == "__main__":
     os.makedirs(STAGING_DIR, exist_ok=True)
     os.makedirs(VAULT_DIR, exist_ok=True)
-    eel.start('index.html', size=(1200, 750))
+    eel.start('index.html', size=(1200, 780))
