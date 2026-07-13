@@ -1,15 +1,18 @@
 import eel
 import os
+import json
 import shutil
 import glob
 import random
+import tkinter as tk
+from tkinter import filedialog
 
 from src.uploader import upload_photo_carousel as execute_browser_upload
 
-ARCHIVE_BASE_DIR = r"D:\2024_Backup"
+CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config.json')
 STAGING_DIR = os.path.join(os.path.dirname(__file__), 'web', 'staging')
-VAULT_DIR = r"D:\IG_Dump_Staging" 
 
+# Pre-packaged dictionary configurations mapped directly to localized file pathways
 MONTH_FOLDER_MAP = {
     "January": "01-00-2024 (Jan. 2024)", "February": "02-00-2024 (Feb. 2024)",
     "March": "03-00-2024 (Mar. 2024)", "April": "04-00-2024 (Apr. 2024)",
@@ -27,16 +30,70 @@ MONTH_NUM_MAP = {
 
 REV_MONTH_MAP = {v: k for k, v in MONTH_NUM_MAP.items()}
 
+def load_config():
+    """Reads saved folder pathways from local storage, falling back onto defaults if keys are missing."""
+    defaults = {
+        "source_dir": r"D:\2024_Backup",
+        "vault_dir": r"D:\IG_Dump_Staging"
+    }
+    
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                saved = json.load(f)
+                # Merges structures smoothly to resolve missing property keys
+                return {**defaults, **saved}
+        except Exception:
+            pass
+            
+    return defaults
+
 eel.init('web')
 
 @eel.expose
+def python_open_folder_picker(default_path):
+    """Spawns a native OS folder explorer panel without launching a blank Tkinter background window."""
+    root = tk.Tk()
+    root.withdraw() # Hide the main root widget block window frame
+    root.attributes('-topmost', True) # Push the window layer over everything else
+    
+    initial_dir = default_path if os.path.exists(default_path) else None
+    chosen_directory = filedialog.askdirectory(initialdir=initial_dir, title="Select Workflow Directory")
+    
+    root.destroy()
+    return os.path.normpath(chosen_directory) if chosen_directory else ""
+
+@eel.expose
+def python_get_paths_config():
+    return load_config()
+
+@eel.expose
+def python_save_paths_config(source_dir, vault_dir):
+    try:
+        config_data = {
+            "source_dir": source_dir.strip(),
+            "vault_dir": vault_dir.strip()
+        }
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(config_data, f, indent=4)
+        
+        os.makedirs(config_data["vault_dir"], exist_ok=True)
+        print(f"[Config Engine] Custom path parameters updated successfully: {config_data}")
+        return True
+    except Exception as e:
+        print(f"[Config Error] Failed to commit paths transaction parameter: {str(e)}")
+        return False
+
+@eel.expose
 def python_reroll_day_pool(month, day, locked_filenames):
-    """Scrapes files matching date context, leaving locked files completely intact."""
+    config = load_config()
+    archive_base = config.get("source_dir")
+    
     folder_name = MONTH_FOLDER_MAP.get(month)
     month_digits = MONTH_NUM_MAP.get(month)
     day_digits = f"{int(day):02d}"
     
-    target_pics_path = os.path.join(ARCHIVE_BASE_DIR, folder_name, "Pics")
+    target_pics_path = os.path.join(archive_base, folder_name, "Pics")
     if not os.path.exists(target_pics_path):
         print(f"[Error] Directory not found: {target_pics_path}")
         return []
@@ -82,18 +139,20 @@ def python_reroll_day_pool(month, day, locked_filenames):
 
 @eel.expose
 def python_save_to_standby(month, day, ordered_filenames):
-    """Saves the exact custom sorted thumbnail array sequence straight down to disk storage."""
+    config = load_config()
+    vault_base = config.get("vault_dir")
+    
     month_digits = MONTH_NUM_MAP.get(month)
     day_digits = f"{int(day):02d}"
     
     date_str = f"{month_digits}-{day_digits}-2024"
     folder_name = f"STAGED_{date_str}"
-    batch_vault_path = os.path.join(VAULT_DIR, folder_name)
+    batch_vault_path = os.path.join(vault_base, folder_name)
     
     counter = 1
     while os.path.exists(batch_vault_path):
         folder_name = f"STAGED_{date_str}_{counter}"
-        batch_vault_path = os.path.join(VAULT_DIR, folder_name)
+        batch_vault_path = os.path.join(vault_base, folder_name)
         counter += 1
         
     os.makedirs(batch_vault_path, exist_ok=True)
@@ -111,8 +170,10 @@ def python_save_to_standby(month, day, ordered_filenames):
 
 @eel.expose
 def python_delete_batch_folder(folder_name):
-    """Purges a specific un-uploaded STAGED folder entirely from the internal drive staging vault."""
-    batch_vault_path = os.path.join(VAULT_DIR, folder_name)
+    config = load_config()
+    vault_base = config.get("vault_dir")
+    
+    batch_vault_path = os.path.join(vault_base, folder_name)
     if os.path.exists(batch_vault_path) and folder_name.startswith("STAGED_"):
         try:
             shutil.rmtree(batch_vault_path)
@@ -125,11 +186,14 @@ def python_delete_batch_folder(folder_name):
 
 @eel.expose
 def python_load_existing_staged_batches():
-    if not os.path.exists(VAULT_DIR):
+    config = load_config()
+    vault_base = config.get("vault_dir")
+    
+    if not os.path.exists(vault_base):
         return []
         
     recovered_batches = []
-    for folder_path in glob.glob(os.path.join(VAULT_DIR, "STAGED_*")):
+    for folder_path in glob.glob(os.path.join(vault_base, "STAGED_*")):
         if os.path.isdir(folder_path):
             folder_name = os.path.basename(folder_path)
             file_count = len(glob.glob(os.path.join(folder_path, "*.jpg")))
@@ -148,7 +212,10 @@ def python_load_existing_staged_batches():
 
 @eel.expose
 def python_upload_batch(folder_name, caption):
-    batch_vault_path = os.path.join(VAULT_DIR, folder_name)
+    config = load_config()
+    vault_base = config.get("vault_dir")
+    
+    batch_vault_path = os.path.join(vault_base, folder_name)
     absolute_image_paths = sorted(glob.glob(os.path.join(batch_vault_path, "*.jpg")))
     
     if not absolute_image_paths:
@@ -160,7 +227,7 @@ def python_upload_batch(folder_name, caption):
         upload_success = execute_browser_upload(absolute_image_paths, caption)
         if upload_success:
             new_folder_name = folder_name.replace("STAGED_", "POSTED_")
-            posted_vault_path = os.path.join(VAULT_DIR, new_folder_name)
+            posted_vault_path = os.path.join(vault_base, new_folder_name)
             if os.path.exists(posted_vault_path):
                 shutil.rmtree(posted_vault_path)
             os.rename(batch_vault_path, posted_vault_path)
@@ -171,6 +238,7 @@ def python_upload_batch(folder_name, caption):
         return False
 
 if __name__ == "__main__":
+    initial_config = load_config()
     os.makedirs(STAGING_DIR, exist_ok=True)
-    os.makedirs(VAULT_DIR, exist_ok=True)
-    eel.start('index.html', size=(1200, 780))
+    os.makedirs(initial_config["vault_dir"], exist_ok=True)
+    eel.start('index.html', size=(1200, 830))

@@ -17,6 +17,12 @@ for (let i = 1; i <= 31; i++) {
 
 document.getElementById('btnReroll').addEventListener('click', triggerPoolReroll);
 document.getElementById('btnSave').addEventListener('click', saveToStandbyQueue);
+document.getElementById('btnSaveConfig').addEventListener('click', commitPathsToConfiguration);
+
+// Click listeners for the new native file explorer hooks
+document.getElementById('btnBrowseSource').addEventListener('click', () => selectDirectory('source'));
+document.getElementById('btnBrowseVault').addEventListener('click', () => selectDirectory('vault'));
+
 document.getElementById('monthSelect').addEventListener('change', () => triggerPoolReroll(false));
 document.getElementById('daySelect').addEventListener('change', () => triggerPoolReroll(false));
 
@@ -40,6 +46,49 @@ function shiftDateStep(direction) {
     document.getElementById('monthSelect').selectedIndex = monthIdx;
     daySelect.value = day;
     triggerPoolReroll(false); 
+}
+
+// Calls Python to trigger the Tkinter native folder selection panel
+async function selectDirectory(targetField) {
+    const defaultPath = targetField === 'source' 
+        ? document.getElementById('cfgSourcePath').value 
+        : document.getElementById('cfgVaultPath').value;
+
+    const chosenPath = await eel.python_open_folder_picker(defaultPath)();
+    
+    if (chosenPath) {
+        if (targetField === 'source') {
+            document.getElementById('cfgSourcePath').value = chosenPath;
+        } else {
+            document.getElementById('cfgVaultPath').value = chosenPath;
+        }
+    }
+}
+
+async function loadPathsFromConfiguration() {
+    const config = await eel.python_get_paths_config()();
+    document.getElementById('cfgSourcePath').value = config.source_dir || "";
+    document.getElementById('cfgVaultPath').value = config.vault_dir || "";
+}
+
+async function commitPathsToConfiguration() {
+    const sourcePath = document.getElementById('cfgSourcePath').value;
+    const vaultPath = document.getElementById('cfgVaultPath').value;
+    
+    const success = await eel.python_save_paths_config(sourcePath, vaultPath)();
+    if (success) {
+        const saveBtn = document.getElementById('btnSaveConfig');
+        saveBtn.innerText = "Saved!";
+        saveBtn.className = "btn btn-success btn-sm w-100 h-100 fw-bold py-1";
+        setTimeout(() => {
+            saveBtn.innerText = "Save Paths";
+            saveBtn.className = "btn btn-outline-primary btn-sm w-100 fw-bold py-1";
+        }, 2000);
+        
+        triggerPoolReroll(false);
+        standbyBatches = [];
+        await loadSavedBatchesFromDisk();
+    }
 }
 
 async function triggerPoolReroll(isRerollAction = true) {
@@ -189,7 +238,6 @@ function syncCaptionText(folderKey, value) {
     if (batch) batch.caption = value;
 }
 
-// New handler function to strip a batch folder off the UI and hard drive storage layout
 async function removeBatchFromPipeline(folderKey) {
     const confirmed = await eel.python_delete_batch_folder(folderKey)();
     if (confirmed) {
@@ -208,8 +256,8 @@ async function deployBatch(folderKey) {
     const batch = standbyBatches[batchIndex];
     let success = await eel.python_upload_batch(batch.folderKey, batch.caption)();
     if (success) {
-        standbyBatches.splice(batchIndex, 1); // <--- This line removes it from the queue array
-        renderStandbyQueue();                 // <--- This line redraws the UI without it
+        standbyBatches.splice(batchIndex, 1);
+        renderStandbyQueue();
     }
 }
 
@@ -229,6 +277,7 @@ async function loadSavedBatchesFromDisk() {
 }
 
 async function init() {
+    await loadPathsFromConfiguration();
     await triggerPoolReroll(false);
     await loadSavedBatchesFromDisk();
 }
