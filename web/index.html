@@ -8,13 +8,14 @@
     <link rel="stylesheet" href="style.css">
     <script type="text/javascript" src="/eel.js"></script>
     <style>
-        /* Contextual styling to ensure the modal dark theme matches perfectly */
+        /* Contextual styling to match offcanvas drawer and modal perfectly to core layout rules */
+        .offcanvas { background-color: #121212; border-left: 1px solid #262626; width: 360px !important; }
         .modal-content { background-color: #121212; border: 1px solid #262626; }
     </style>
 </head>
 <body class="bg-black text-white">
 
-    <!-- Top Navigation Branding Bar with Modal Trigger -->
+    <!-- Top Navigation Branding Bar with Sidebar Drawer Trigger -->
     <nav class="navbar navbar-dark border-bottom border-secondary sticky-top px-4" style="background-color: #000000;">
         <span class="navbar-brand mb-0 h1 fw-bold tracking-wide" style="font-size: 1.3rem;">
             CREATOR STUDIO <span class="text-white-50 fw-light">| Pipeline V2.2</span>
@@ -24,7 +25,7 @@
         </button>
     </nav>
 
-    <!-- Main Studio Dashboard Content -->
+    <!-- Main Dashboard Workspace Frame -->
     <div class="container-fluid py-4 px-4">
         <div class="row g-4">
             
@@ -37,6 +38,19 @@
                     <div class="row g-2 align-items-center mb-4">
                         <div class="col-auto">
                             <button class="btn btn-outline-secondary fw-bold" id="btnPrevDate">◀</button>
+                        </div>
+                        <div class="col">
+                            <select id="yearSelect" class="form-select custom-input text-white">
+                                <option value="2020">2020</option>
+                                <option value="2021">2021</option>
+                                <option value="2022">2022</option>
+                                <option value="2023">2023</option>
+                                <option value="2024" selected>2024</option>
+                                <option value="2025">2025</option>
+                                <option value="2026">2026</option>
+                                <option value="2027">2027</option>
+                                <option value="2028">2028</option>
+                            </select>
                         </div>
                         <div class="col">
                             <select id="monthSelect" class="form-select custom-input text-white">
@@ -107,7 +121,7 @@
                     </div>
                 </div>
                 <div class="modal-footer border-top border-secondary">
-                    <button id="btnSaveConfig" class="btn btn-outline-primary btn-sm w-100 fw-bold py-1" style="height: 31px;">Save Paths</button>
+                    <button id="btnSaveConfig" class="btn btn-outline-primary btn-sm w-100 fw-bold py-1" style="height: 31px;" data-bs-dismiss="modal">Save Paths</button>
                 </div>
             </div>
         </div>

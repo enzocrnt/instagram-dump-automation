@@ -19,10 +19,12 @@ document.getElementById('btnReroll').addEventListener('click', triggerPoolReroll
 document.getElementById('btnSave').addEventListener('click', saveToStandbyQueue);
 document.getElementById('btnSaveConfig').addEventListener('click', commitPathsToConfiguration);
 
-// Click listeners for the new native file explorer hooks
+// Click listeners for the native file explorer hooks
 document.getElementById('btnBrowseSource').addEventListener('click', () => selectDirectory('source'));
 document.getElementById('btnBrowseVault').addEventListener('click', () => selectDirectory('vault'));
 
+// Timeline change event listeners including our new year component
+document.getElementById('yearSelect').addEventListener('change', () => triggerPoolReroll(false));
 document.getElementById('monthSelect').addEventListener('change', () => triggerPoolReroll(false));
 document.getElementById('daySelect').addEventListener('change', () => triggerPoolReroll(false));
 
@@ -32,15 +34,30 @@ document.getElementById('btnPrevDate').addEventListener('click', () => shiftDate
 function shiftDateStep(direction) {
     let day = parseInt(daySelect.value);
     let monthIdx = document.getElementById('monthSelect').selectedIndex;
+    let yearSelect = document.getElementById('yearSelect');
+    let year = parseInt(yearSelect.value);
     
     day += direction;
     
     if (day > 31) {
         day = 1;
-        monthIdx = (monthIdx + 1) % 12;
+        monthIdx += 1;
+        if (monthIdx > 11) {
+            monthIdx = 0;
+            year += 1;
+        }
     } else if (day < 1) {
         day = 31;
-        monthIdx = (monthIdx - 1 + 12) % 12;
+        monthIdx -= 1;
+        if (monthIdx < 0) {
+            monthIdx = 11;
+            year -= 1;
+        }
+    }
+    
+    // Safety boundaries on year boundaries
+    if (document.querySelector(`#yearSelect option[value="${year}"]`)) {
+        yearSelect.value = year;
     }
     
     document.getElementById('monthSelect').selectedIndex = monthIdx;
@@ -92,6 +109,7 @@ async function commitPathsToConfiguration() {
 }
 
 async function triggerPoolReroll(isRerollAction = true) {
+    const year = document.getElementById('yearSelect').value;
     const month = document.getElementById('monthSelect').value;
     const day = document.getElementById('daySelect').value;
     
@@ -100,7 +118,7 @@ async function triggerPoolReroll(isRerollAction = true) {
         lockedFiles = currentPool.filter(item => item.locked).map(item => item.name);
     }
     
-    const backendPayload = await eel.python_reroll_day_pool(month, day, lockedFiles)();
+    const backendPayload = await eel.python_reroll_day_pool(year, month, day, lockedFiles)();
     
     currentPool = backendPayload.map(fileObject => {
         const wasLocked = lockedFiles.includes(fileObject.filename);
@@ -176,24 +194,25 @@ function handleDragEnd() {
     this.classList.remove('dragging');
 }
 
-function generateAutoCaption(month, day) {
-    return `${MONTH_ABBREVIATIONS[month] || month} ${day}, 2024`;
+function generateAutoCaption(year, month, day) {
+    return `${MONTH_ABBREVIATIONS[month] || month} ${day}, ${year}`;
 }
 
 async function saveToStandbyQueue() {
     if (currentPool.length === 0) return;
 
+    const year = document.getElementById('yearSelect').value;
     const month = document.getElementById('monthSelect').value;
     const day = document.getElementById('daySelect').value;
     
     const orderedFilenames = currentPool.map(item => item.name);
 
-    const activeFolderName = await eel.python_save_to_standby(month, day, orderedFilenames)();
-    const defaultCaption = generateAutoCaption(month, day);
+    const activeFolderName = await eel.python_save_to_standby(year, month, day, orderedFilenames)();
+    const defaultCaption = generateAutoCaption(year, month, day);
 
     standbyBatches.push({
         folderKey: activeFolderName,
-        dateDisplay: `${month} ${day}`,
+        dateDisplay: `${month} ${day}, ${year}`,
         count: orderedFilenames.length,
         caption: defaultCaption
     });
@@ -264,8 +283,12 @@ async function deployBatch(folderKey) {
 async function loadSavedBatchesFromDisk() {
     const discovered = await eel.python_load_existing_staged_batches()();
     discovered.forEach(batch => {
-        const parts = batch.dateDisplay.split(" ");
-        const computedCaption = generateAutoCaption(parts[0], parts[1]);
+        const parts = batch.dateDisplay.split(" "); // Format expected: "Month Day, Year"
+        const month = parts[0];
+        const day = parts[1].replace(",", "");
+        const year = parts[2] || "2024";
+        
+        const computedCaption = generateAutoCaption(year, month, day);
         standbyBatches.push({
             folderKey: batch.folderKey,
             dateDisplay: batch.dateDisplay,

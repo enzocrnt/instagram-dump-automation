@@ -4,6 +4,7 @@ import json
 import shutil
 import glob
 import random
+import datetime
 import tkinter as tk
 from tkinter import filedialog
 
@@ -11,16 +12,6 @@ from src.uploader import upload_photo_carousel as execute_browser_upload
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config.json')
 STAGING_DIR = os.path.join(os.path.dirname(__file__), 'web', 'staging')
-
-# Pre-packaged dictionary configurations mapped directly to localized file pathways
-MONTH_FOLDER_MAP = {
-    "January": "01-00-2024 (Jan. 2024)", "February": "02-00-2024 (Feb. 2024)",
-    "March": "03-00-2024 (Mar. 2024)", "April": "04-00-2024 (Apr. 2024)",
-    "May": "05-00-2024 (May 2024)", "June": "06-00-2024 (Jun. 2024)",
-    "July": "07-00-2024 (Jul. 2024)", "August": "08-00-2024 (Aug. 2024)",
-    "September": "09-00-2024 (Sept. 2024)", "October": "10-00-2024 (Oct. 2024)",
-    "November": "11-00-2024 (Nov. 2024)", "December": "12-00-2024 (Dec. 2024)"
-}
 
 MONTH_NUM_MAP = {
     "January": "01", "February": "02", "March": "03", "April": "04",
@@ -41,7 +32,6 @@ def load_config():
         try:
             with open(CONFIG_FILE, 'r') as f:
                 saved = json.load(f)
-                # Merges structures smoothly to resolve missing property keys
                 return {**defaults, **saved}
         except Exception:
             pass
@@ -54,8 +44,8 @@ eel.init('web')
 def python_open_folder_picker(default_path):
     """Spawns a native OS folder explorer panel without launching a blank Tkinter background window."""
     root = tk.Tk()
-    root.withdraw() # Hide the main root widget block window frame
-    root.attributes('-topmost', True) # Push the window layer over everything else
+    root.withdraw()
+    root.attributes('-topmost', True)
     
     initial_dir = default_path if os.path.exists(default_path) else None
     chosen_directory = filedialog.askdirectory(initialdir=initial_dir, title="Select Workflow Directory")
@@ -85,35 +75,77 @@ def python_save_paths_config(source_dir, vault_dir):
         return False
 
 @eel.expose
-def python_reroll_day_pool(month, day, locked_filenames):
+def python_reroll_day_pool(year, month, day, locked_filenames):
     config = load_config()
     archive_base = config.get("source_dir")
     
-    folder_name = MONTH_FOLDER_MAP.get(month)
-    month_digits = MONTH_NUM_MAP.get(month)
-    day_digits = f"{int(day):02d}"
-    
-    target_pics_path = os.path.join(archive_base, folder_name, "Pics")
-    if not os.path.exists(target_pics_path):
-        print(f"[Error] Directory not found: {target_pics_path}")
+    if not os.path.exists(archive_base):
+        print(f"[Error] Directory not found: {archive_base}")
         return []
         
-    search_pattern = f"IMG_2024{month_digits}{day_digits}_*.jpg"
-    matched_file_paths = glob.glob(os.path.join(target_pics_path, search_pattern))
+    target_year_str = str(year)
+    target_month_str = MONTH_NUM_MAP.get(month)
+    target_day_str = f"{int(day):02d}"
+    
+    # Supported image formats
+    valid_extensions = ('.jpg', '.jpeg', '.png')
+    matched_file_paths = []
+
+    # RECURSIVE DECOUPLING: Walk through every directory under the main source folder
+    for root_dir, _, files in os.walk(archive_base):
+        # Prevent searching inside our staging or vault structures if they live inside source_dir
+        if "staging" in root_dir or "STAGED_" in root_dir or "POSTED_" in root_dir:
+            continue
+            
+        for file in files:
+            if file.lower().endswith(valid_extensions):
+                full_path = os.path.join(root_dir, file)
+                try:
+                    # METADATA EXTRACTION: Query the OS-reported modification time
+                    mtime = os.path.getmtime(full_path)
+                    file_date = datetime.datetime.fromtimestamp(mtime)
+                    
+                    # Exact date match: YEAR + MONTH + DAY
+                    if (str(file_date.year) == target_year_str and 
+                        f"{file_date.month:02d}" == target_month_str and 
+                        f"{file_date.day:02d}" == target_day_str):
+                        matched_file_paths.append(full_path)
+                except Exception as e:
+                    print(f"[Warning] Could not read metadata for {file}: {str(e)}")
+                    continue
+
     if not matched_file_paths:
         return []
 
-    all_available_basenames = [os.path.basename(p) for p in matched_file_paths]
-    candidate_pool = [name for name in all_available_basenames if name not in locked_filenames]
+    all_available_files = []
+    for p in matched_file_paths:
+        base = os.path.basename(p)
+        all_available_files.append({"basename": base, "full_path": p})
+
+    candidate_pool = [f for f in all_available_files if f["basename"] not in locked_filenames]
     random.shuffle(candidate_pool)
     
     slots_needed = max(0, 10 - len(locked_filenames))
-    newly_selected_files = candidate_pool[:slots_needed]
-    final_filename_selection = list(locked_filenames) + newly_selected_files
+    newly_selected = candidate_pool[:slots_needed]
+    
+    final_selection = []
+    
+    # Keep locked items in the pool
+    for fname in locked_filenames:
+        orig_path = ""
+        for item in all_available_files:
+            if item["basename"] == fname:
+                orig_path = item["full_path"]
+                break
+        if orig_path:
+            final_selection.append({"basename": fname, "full_path": orig_path})
+
+    final_selection.extend(newly_selected)
+    final_basenames = [item["basename"] for item in final_selection]
     
     if os.path.exists(STAGING_DIR):
         for f in os.listdir(STAGING_DIR):
-            if f not in final_filename_selection and f != ".gitkeep":
+            if f not in final_basenames and f != ".gitkeep":
                 try:
                     os.remove(os.path.join(STAGING_DIR, f))
                 except Exception:
@@ -122,8 +154,9 @@ def python_reroll_day_pool(month, day, locked_filenames):
         os.makedirs(STAGING_DIR, exist_ok=True)
 
     staged_payload_response = []
-    for fname in final_filename_selection:
-        source_img_path = os.path.join(target_pics_path, fname)
+    for item in final_selection:
+        fname = item["basename"]
+        source_img_path = item["full_path"]
         dest_img_path = os.path.join(STAGING_DIR, fname)
         
         if os.path.exists(source_img_path) and not os.path.exists(dest_img_path):
@@ -138,14 +171,15 @@ def python_reroll_day_pool(month, day, locked_filenames):
     return staged_payload_response
 
 @eel.expose
-def python_save_to_standby(month, day, ordered_filenames):
+def python_save_to_standby(year, month, day, ordered_filenames):
     config = load_config()
     vault_base = config.get("vault_dir")
     
     month_digits = MONTH_NUM_MAP.get(month)
     day_digits = f"{int(day):02d}"
+    target_year = str(year)
     
-    date_str = f"{month_digits}-{day_digits}-2024"
+    date_str = f"{month_digits}-{day_digits}-{target_year}"
     folder_name = f"STAGED_{date_str}"
     batch_vault_path = os.path.join(vault_base, folder_name)
     
@@ -196,12 +230,12 @@ def python_load_existing_staged_batches():
     for folder_path in glob.glob(os.path.join(vault_base, "STAGED_*")):
         if os.path.isdir(folder_path):
             folder_name = os.path.basename(folder_path)
-            file_count = len(glob.glob(os.path.join(folder_path, "*.jpg")))
+            file_count = len(glob.glob(os.path.join(folder_path, "*.jpg"))) + len(glob.glob(os.path.join(folder_path, "*.png")))
             
             try:
                 date_part = folder_name.split("STAGED_")[1].split("_")[0]
-                month_digits, day_digits, _ = date_part.split("-")
-                date_display = f"{REV_MONTH_MAP.get(month_digits, 'January')} {str(int(day_digits))}"
+                month_digits, day_digits, year_digits = date_part.split("-")
+                date_display = f"{REV_MONTH_MAP.get(month_digits, 'January')} {str(int(day_digits))}, {year_digits}"
             except Exception:
                 date_display = "Unknown Date"
                 
@@ -216,7 +250,7 @@ def python_upload_batch(folder_name, caption):
     vault_base = config.get("vault_dir")
     
     batch_vault_path = os.path.join(vault_base, folder_name)
-    absolute_image_paths = sorted(glob.glob(os.path.join(batch_vault_path, "*.jpg")))
+    absolute_image_paths = sorted(glob.glob(os.path.join(batch_vault_path, "*.jpg")) + glob.glob(os.path.join(batch_vault_path, "*.png")))
     
     if not absolute_image_paths:
         print(f"[Error] No files found in vault for {folder_name} to upload.")
