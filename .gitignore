@@ -1,0 +1,20 @@
+# Local credential files (Contains your API Key)
+.env
+
+# Application configurations
+config.json
+
+# Local tracking database
+database/tracker.db
+
+# Heavy Selenium browser binaries, cookies, and active login sessions
+database/selenium_chrome_profile/
+
+# Staging area directories (where media is duplicated)
+D:/IG_Dump_Staging/
+
+# Python caching footprints
+__pycache__/
+*.pyc
+.pytest_cache/
+.vscode/
