@@ -2,44 +2,67 @@ let currentPool = [];
 let standbyBatches = [];
 let dragSrcElement = null;  
 
+const MONTH_DAYS_MAP = {
+    "January": 31, "February": 28, "March": 31, "April": 30, "May": 31, "June": 30,
+    "July": 31, "August": 31, "September": 30, "October": 31, "November": 30, "December": 31
+};
+
 const MONTH_ABBREVIATIONS = {
     "January": "Jan.", "February": "Feb.", "March": "Mar.", "April": "Apr.",
     "May": "May", "June": "Jun.", "July": "Jul.", "August": "Aug.",
     "September": "Sept.", "October": "Oct.", "November": "Nov.", "December": "Dec."
 };
 
-const daySelect = document.getElementById('daySelect');
-for (let i = 1; i <= 31; i++) {
-    let opt = document.createElement('option');
-    opt.value = i; opt.innerText = i;
-    daySelect.appendChild(opt);
-}
-
+// Global Interactive DOM Event Listeners
 document.getElementById('btnReroll').addEventListener('click', triggerPoolReroll);
 document.getElementById('btnSave').addEventListener('click', saveToStandbyQueue);
 document.getElementById('btnSaveConfig').addEventListener('click', commitPathsToConfiguration);
-
-// Click listeners for the native file explorer hooks
 document.getElementById('btnBrowseSource').addEventListener('click', () => selectDirectory('source'));
 document.getElementById('btnBrowseVault').addEventListener('click', () => selectDirectory('vault'));
 
-// Timeline change event listeners including our new year component
-document.getElementById('yearSelect').addEventListener('change', () => triggerPoolReroll(false));
-document.getElementById('monthSelect').addEventListener('change', () => triggerPoolReroll(false));
+document.getElementById('yearSelect').addEventListener('change', () => { updateAdaptiveDayLimits(); triggerPoolReroll(false); });
+document.getElementById('monthSelect').addEventListener('change', () => { updateAdaptiveDayLimits(); triggerPoolReroll(false); });
 document.getElementById('daySelect').addEventListener('change', () => triggerPoolReroll(false));
 
 document.getElementById('btnNextDate').addEventListener('click', () => shiftDateStep(1));
 document.getElementById('btnPrevDate').addEventListener('click', () => shiftDateStep(-1));
 
+// Adaptive Calendar Bounds Engine
+function updateAdaptiveDayLimits() {
+    const year = parseInt(document.getElementById('yearSelect').value);
+    const month = document.getElementById('monthSelect').value;
+    const daySelect = document.getElementById('daySelect');
+    
+    let maxDays = MONTH_DAYS_MAP[month] || 31;
+    
+    if (month === "February") {
+        const isLeap = (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
+        maxDays = isLeap ? 29 : 28;
+    }
+    
+    const currentVal = parseInt(daySelect.value) || 1;
+    daySelect.innerHTML = '';
+    
+    for (let i = 1; i <= maxDays; i++) {
+        let opt = document.createElement('option');
+        opt.value = i; opt.innerText = i;
+        daySelect.appendChild(opt);
+    }
+    
+    daySelect.value = Math.min(currentVal, maxDays);
+}
+
 function shiftDateStep(direction) {
+    const daySelect = document.getElementById('daySelect');
     let day = parseInt(daySelect.value);
     let monthIdx = document.getElementById('monthSelect').selectedIndex;
     let yearSelect = document.getElementById('yearSelect');
     let year = parseInt(yearSelect.value);
     
+    const maxDaysInMonth = daySelect.options.length;
     day += direction;
     
-    if (day > 31) {
+    if (day > maxDaysInMonth) {
         day = 1;
         monthIdx += 1;
         if (monthIdx > 11) {
@@ -47,25 +70,26 @@ function shiftDateStep(direction) {
             year += 1;
         }
     } else if (day < 1) {
-        day = 31;
         monthIdx -= 1;
         if (monthIdx < 0) {
             monthIdx = 11;
             year -= 1;
         }
+        document.getElementById('monthSelect').selectedIndex = monthIdx;
+        updateAdaptiveDayLimits();
+        day = daySelect.options.length; 
     }
     
-    // Safety boundaries on year boundaries
     if (document.querySelector(`#yearSelect option[value="${year}"]`)) {
         yearSelect.value = year;
     }
     
     document.getElementById('monthSelect').selectedIndex = monthIdx;
+    updateAdaptiveDayLimits();
     daySelect.value = day;
     triggerPoolReroll(false); 
 }
 
-// Calls Python to trigger the Tkinter native folder selection panel
 async function selectDirectory(targetField) {
     const defaultPath = targetField === 'source' 
         ? document.getElementById('cfgSourcePath').value 
@@ -102,13 +126,32 @@ async function commitPathsToConfiguration() {
             saveBtn.className = "btn btn-outline-primary btn-sm w-100 fw-bold py-1";
         }, 2000);
         
-        triggerPoolReroll(false);
+        await verifyActiveDriveStatus();
         standbyBatches = [];
         await loadSavedBatchesFromDisk();
     }
 }
 
+async function verifyActiveDriveStatus() {
+    const connected = await eel.python_verify_source_connection()();
+    const banner = document.getElementById('driveWarningBanner');
+    if (!connected) {
+        banner.classList.remove('d-none');
+        return false;
+    } else {
+        banner.classList.add('d-none');
+        return true;
+    }
+}
+
 async function triggerPoolReroll(isRerollAction = true) {
+    const driveReady = await verifyActiveDriveStatus();
+    if (!driveReady) {
+        currentPool = [];
+        renderGalleryDeckGrid();
+        return;
+    }
+
     const year = document.getElementById('yearSelect').value;
     const month = document.getElementById('monthSelect').value;
     const day = document.getElementById('daySelect').value;
@@ -118,6 +161,9 @@ async function triggerPoolReroll(isRerollAction = true) {
         lockedFiles = currentPool.filter(item => item.locked).map(item => item.name);
     }
     
+    const overlay = document.getElementById('deckLoadingOverlay');
+    overlay.classList.remove('d-none');
+
     const backendPayload = await eel.python_reroll_day_pool(year, month, day, lockedFiles)();
     
     currentPool = backendPayload.map(fileObject => {
@@ -126,12 +172,18 @@ async function triggerPoolReroll(isRerollAction = true) {
     });
     
     renderGalleryDeckGrid();
+    overlay.classList.add('d-none');
 }
 
 function renderGalleryDeckGrid() {
     const container = document.getElementById('galleryContainer');
     container.innerHTML = '';
     
+    if (currentPool.length === 0) {
+        container.innerHTML = `<p class="text-white-50 small font-italic p-3 m-0">No photos found matching this date query.</p>`;
+        return;
+    }
+
     currentPool.forEach((item, index) => {
         const wrapper = document.createElement('div');
         wrapper.className = `thumb-block overflow-hidden ${item.locked ? 'locked' : ''}`;
@@ -221,6 +273,7 @@ async function saveToStandbyQueue() {
     shiftDateStep(1); 
 }
 
+// Fully Responsive Mobile-Adaptive Component Renderer
 function renderStandbyQueue() {
     const container = document.getElementById('queueContainer');
     container.innerHTML = '';
@@ -232,29 +285,40 @@ function renderStandbyQueue() {
 
     standbyBatches.forEach(batch => {
         const card = document.createElement('div');
-        card.className = 'queue-card p-3 mb-3 d-flex align-items-start justify-content-between';
+        card.className = 'queue-card p-3 mb-3 d-flex flex-wrap flex-sm-nowrap align-items-start justify-content-between gap-3';
         card.innerHTML = `
-            <div style="width: 45%;">
-                <h6 class="mb-1 small fw-bold" style="color: #0095F6; font-family: monospace;">${batch.folderKey}</h6>
+            <div class="flex-grow-1 min-w-0" style="flex-basis: 200px;">
+                <h6 class="mb-1 small fw-bold text-truncate" style="color: #0095F6; font-family: monospace;" title="${batch.folderKey}">${batch.folderKey}</h6>
                 <div class="text-white-50 small mb-1">Source: ${batch.dateDisplay}</div>
                 <div class="small text-white-50 mb-3">${batch.count} files logged</div>
-                <div class="d-flex gap-2">
-                    <button class="btn btn-primary btn-sm fw-bold ig-btn-primary flex-grow-1" onclick="deployBatch('${batch.folderKey}')">Upload</button>
-                    <button class="btn btn-outline-danger btn-sm fw-bold" style="padding: 0.25rem 0.5rem;" onclick="removeBatchFromPipeline('${batch.folderKey}')">Remove</button>
+                
+                <div class="d-flex flex-wrap gap-2 align-items-center w-100">
+                    <button class="btn btn-primary btn-sm fw-bold ig-btn-primary flex-grow-1 py-1" style="min-width: 70px; height: 31px;" onclick="deployBatch('${batch.folderKey}')">Upload</button>
+                    <button class="btn btn-outline-secondary btn-sm py-1 px-2 d-flex align-items-center justify-content-center" style="height: 31px; min-width: 36px;" onclick="openBatchInExplorer('${batch.folderKey}')">📂</button>
+                    <button class="btn btn-outline-danger btn-sm fw-bold py-1 flex-grow-1" style="min-width: 75px; height: 31px;" onclick="removeBatchFromPipeline('${batch.folderKey}')">Remove</button>
                 </div>
             </div>
-            <div class="flex-grow-1 ms-3">
+            
+            <div class="flex-grow-1 w-100" style="flex-basis: 220px;">
                 <label class="text-white-50 small mb-1">Manual Caption Input:</label>
-                <textarea class="form-control caption-area" rows="3" onkeyup="syncCaptionText('${batch.folderKey}', this.value)">${batch.caption}</textarea>
+                <textarea class="form-control caption-area w-100" rows="3" style="resize: none;" onkeyup="syncCaptionText('${batch.folderKey}', this.value)">${batch.caption}</textarea>
             </div>
         `;
         container.appendChild(card);
     });
 }
 
-function syncCaptionText(folderKey, value) {
+async function syncCaptionText(folderKey, value) {
     const batch = standbyBatches.find(b => b.folderKey === folderKey);
-    if (batch) batch.caption = value;
+    if (batch) {
+        batch.caption = value;
+        // Push modification back to system storage file asynchronously
+        await eel.python_sync_caption_file(folderKey, value)();
+    }
+}
+
+async function openBatchInExplorer(folderKey) {
+    await eel.python_open_batch_in_explorer(folderKey)();
 }
 
 async function removeBatchFromPipeline(folderKey) {
@@ -282,26 +346,25 @@ async function deployBatch(folderKey) {
 
 async function loadSavedBatchesFromDisk() {
     const discovered = await eel.python_load_existing_staged_batches()();
+    standbyBatches = []; 
     discovered.forEach(batch => {
-        const parts = batch.dateDisplay.split(" "); // Format expected: "Month Day, Year"
-        const month = parts[0];
-        const day = parts[1].replace(",", "");
-        const year = parts[2] || "2024";
-        
-        const computedCaption = generateAutoCaption(year, month, day);
         standbyBatches.push({
             folderKey: batch.folderKey,
             dateDisplay: batch.dateDisplay,
             count: batch.count,
-            caption: computedCaption
+            caption: batch.caption
         });
     });
     renderStandbyQueue();
 }
 
 async function init() {
+    updateAdaptiveDayLimits();
     await loadPathsFromConfiguration();
-    await triggerPoolReroll(false);
+    const activeDrive = await verifyActiveDriveStatus();
+    if (activeDrive) {
+        await triggerPoolReroll(false);
+    }
     await loadSavedBatchesFromDisk();
 }
 init();

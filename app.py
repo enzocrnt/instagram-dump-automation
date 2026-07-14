@@ -5,6 +5,8 @@ import shutil
 import glob
 import random
 import datetime
+import hashlib
+import concurrent.futures
 import tkinter as tk
 from tkinter import filedialog
 
@@ -21,8 +23,9 @@ MONTH_NUM_MAP = {
 
 REV_MONTH_MAP = {v: k for k, v in MONTH_NUM_MAP.items()}
 
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
 def load_config():
-    """Reads saved folder pathways from local storage, falling back onto defaults if keys are missing."""
     defaults = {
         "source_dir": r"D:\2024_Backup",
         "vault_dir": r"D:\IG_Dump_Staging"
@@ -41,8 +44,13 @@ def load_config():
 eel.init('web')
 
 @eel.expose
+def python_verify_source_connection():
+    config = load_config()
+    source_dir = config.get("source_dir", "")
+    return os.path.exists(source_dir) and os.path.isdir(source_dir)
+
+@eel.expose
 def python_open_folder_picker(default_path):
-    """Spawns a native OS folder explorer panel without launching a blank Tkinter background window."""
     root = tk.Tk()
     root.withdraw()
     root.attributes('-topmost', True)
@@ -68,11 +76,56 @@ def python_save_paths_config(source_dir, vault_dir):
             json.dump(config_data, f, indent=4)
         
         os.makedirs(config_data["vault_dir"], exist_ok=True)
-        print(f"[Config Engine] Custom path parameters updated successfully: {config_data}")
         return True
     except Exception as e:
-        print(f"[Config Error] Failed to commit paths transaction parameter: {str(e)}")
+        print(f"[Config Error] Failed to update paths: {str(e)}")
         return False
+
+@eel.expose
+def python_open_batch_in_explorer(folder_name):
+    config = load_config()
+    vault_base = config.get("vault_dir")
+    batch_vault_path = os.path.join(vault_base, folder_name)
+    if os.path.exists(batch_vault_path):
+        os.startfile(batch_vault_path)
+
+@eel.expose
+def python_sync_caption_file(folder_name, caption_text):
+    """Overwrites persistent string log values within target directory payload."""
+    config = load_config()
+    vault_base = config.get("vault_dir")
+    batch_vault_path = os.path.join(vault_base, folder_name)
+    if os.path.exists(batch_vault_path):
+        try:
+            with open(os.path.join(batch_vault_path, "caption.txt"), "w", encoding="utf-8") as f:
+                f.write(caption_text)
+            return True
+        except Exception:
+            return False
+    return False
+
+def background_recursive_file_search(archive_base, target_year_str, target_month_str, target_day_str):
+    valid_extensions = ('.jpg', '.jpeg', '.png')
+    matched_file_paths = []
+
+    for root_dir, _, files in os.walk(archive_base):
+        if any(ignored in root_dir for ignored in ["staging", "STAGED_", "POSTED_"]):
+            continue
+            
+        for file in files:
+            if file.lower().endswith(valid_extensions):
+                full_path = os.path.join(root_dir, file)
+                try:
+                    mtime = os.path.getmtime(full_path)
+                    file_date = datetime.datetime.fromtimestamp(mtime)
+                    
+                    if (str(file_date.year) == target_year_str and 
+                        f"{file_date.month:02d}" == target_month_str and 
+                        f"{file_date.day:02d}" == target_day_str):
+                        matched_file_paths.append(full_path)
+                except Exception:
+                    continue
+    return matched_file_paths
 
 @eel.expose
 def python_reroll_day_pool(year, month, day, locked_filenames):
@@ -80,39 +133,20 @@ def python_reroll_day_pool(year, month, day, locked_filenames):
     archive_base = config.get("source_dir")
     
     if not os.path.exists(archive_base):
-        print(f"[Error] Directory not found: {archive_base}")
         return []
         
     target_year_str = str(year)
     target_month_str = MONTH_NUM_MAP.get(month)
     target_day_str = f"{int(day):02d}"
     
-    # Supported image formats
-    valid_extensions = ('.jpg', '.jpeg', '.png')
-    matched_file_paths = []
-
-    # RECURSIVE DECOUPLING: Walk through every directory under the main source folder
-    for root_dir, _, files in os.walk(archive_base):
-        # Prevent searching inside our staging or vault structures if they live inside source_dir
-        if "staging" in root_dir or "STAGED_" in root_dir or "POSTED_" in root_dir:
-            continue
-            
-        for file in files:
-            if file.lower().endswith(valid_extensions):
-                full_path = os.path.join(root_dir, file)
-                try:
-                    # METADATA EXTRACTION: Query the OS-reported modification time
-                    mtime = os.path.getmtime(full_path)
-                    file_date = datetime.datetime.fromtimestamp(mtime)
-                    
-                    # Exact date match: YEAR + MONTH + DAY
-                    if (str(file_date.year) == target_year_str and 
-                        f"{file_date.month:02d}" == target_month_str and 
-                        f"{file_date.day:02d}" == target_day_str):
-                        matched_file_paths.append(full_path)
-                except Exception as e:
-                    print(f"[Warning] Could not read metadata for {file}: {str(e)}")
-                    continue
+    future = executor.submit(
+        background_recursive_file_search, 
+        archive_base, target_year_str, target_month_str, target_day_str
+    )
+    while not future.done():
+        eel.sleep(0.05)
+        
+    matched_file_paths = future.result()
 
     if not matched_file_paths:
         return []
@@ -120,7 +154,14 @@ def python_reroll_day_pool(year, month, day, locked_filenames):
     all_available_files = []
     for p in matched_file_paths:
         base = os.path.basename(p)
-        all_available_files.append({"basename": base, "full_path": p})
+        dir_hash = hashlib.md5(os.path.dirname(p).encode('utf-8')).hexdigest()[:8]
+        unique_name = f"_{dir_hash}_{base}"
+        
+        all_available_files.append({
+            "basename": unique_name, 
+            "original_name": base, 
+            "full_path": p
+        })
 
     candidate_pool = [f for f in all_available_files if f["basename"] not in locked_filenames]
     random.shuffle(candidate_pool)
@@ -129,16 +170,10 @@ def python_reroll_day_pool(year, month, day, locked_filenames):
     newly_selected = candidate_pool[:slots_needed]
     
     final_selection = []
-    
-    # Keep locked items in the pool
     for fname in locked_filenames:
-        orig_path = ""
-        for item in all_available_files:
-            if item["basename"] == fname:
-                orig_path = item["full_path"]
-                break
-        if orig_path:
-            final_selection.append({"basename": fname, "full_path": orig_path})
+        orig_item = next((item for item in all_available_files if item["basename"] == fname), None)
+        if orig_item:
+            final_selection.append(orig_item)
 
     final_selection.extend(newly_selected)
     final_basenames = [item["basename"] for item in final_selection]
@@ -191,15 +226,24 @@ def python_save_to_standby(year, month, day, ordered_filenames):
         
     os.makedirs(batch_vault_path, exist_ok=True)
     
+    # Generate persistent default text block
+    default_caption = f"{month[:3]}. {int(day)}, {year}"
+    with open(os.path.join(batch_vault_path, "caption.txt"), "w", encoding="utf-8") as f:
+        f.write(default_caption)
+    
     for index, fname in enumerate(ordered_filenames):
         source_file = os.path.join(STAGING_DIR, fname)
-        indexed_filename = f"{index:02d}_{fname}"
+        
+        clean_filename = fname
+        if fname.startswith("_") and len(fname.split("_")) >= 3:
+            clean_filename = "_".join(fname.split("_")[2:])
+            
+        indexed_filename = f"{index:02d}_{clean_filename}"
         destination_file = os.path.join(batch_vault_path, indexed_filename)
         
         if os.path.exists(source_file):
             shutil.copy2(source_file, destination_file)
             
-    print(f"[Vault Log] Locked down drag-sorted files into: {batch_vault_path}")
     return folder_name
 
 @eel.expose
@@ -211,7 +255,6 @@ def python_delete_batch_folder(folder_name):
     if os.path.exists(batch_vault_path) and folder_name.startswith("STAGED_"):
         try:
             shutil.rmtree(batch_vault_path)
-            print(f"[Vault Log] Successfully deleted cancelled batch folder: {folder_name}")
             return True
         except Exception as e:
             print(f"[Vault Error] Failed to delete batch folder {folder_name}: {str(e)}")
@@ -238,9 +281,22 @@ def python_load_existing_staged_batches():
                 date_display = f"{REV_MONTH_MAP.get(month_digits, 'January')} {str(int(day_digits))}, {year_digits}"
             except Exception:
                 date_display = "Unknown Date"
+            
+            # Read saved caption string if file metadata exists
+            saved_caption = date_display
+            caption_file_path = os.path.join(folder_path, "caption.txt")
+            if os.path.exists(caption_file_path):
+                try:
+                    with open(caption_file_path, "r", encoding="utf-8") as f:
+                        saved_caption = f.read().strip()
+                except Exception:
+                    pass
                 
             recovered_batches.append({
-                "folderKey": folder_name, "dateDisplay": date_display, "count": file_count
+                "folderKey": folder_name, 
+                "dateDisplay": date_display, 
+                "count": file_count,
+                "caption": saved_caption
             })
     return sorted(recovered_batches, key=lambda x: x['folderKey'])
 
@@ -253,7 +309,6 @@ def python_upload_batch(folder_name, caption):
     absolute_image_paths = sorted(glob.glob(os.path.join(batch_vault_path, "*.jpg")) + glob.glob(os.path.join(batch_vault_path, "*.png")))
     
     if not absolute_image_paths:
-        print(f"[Error] No files found in vault for {folder_name} to upload.")
         return False
 
     print(f"\n--- EXECUTION DEPLOYMENT TRIGGERED FOR {folder_name} ---")
@@ -275,4 +330,10 @@ if __name__ == "__main__":
     initial_config = load_config()
     os.makedirs(STAGING_DIR, exist_ok=True)
     os.makedirs(initial_config["vault_dir"], exist_ok=True)
-    eel.start('index.html', size=(1200, 830))
+    
+    # Direct fullscreen window implementation on bootup execution
+    eel.start(
+        'index.html', 
+        mode='chrome', 
+        cmdline_args=['--start-maximized']
+    )

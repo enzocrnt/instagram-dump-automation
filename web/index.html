@@ -8,29 +8,57 @@
     <link rel="stylesheet" href="style.css">
     <script type="text/javascript" src="/eel.js"></script>
     <style>
-        /* Contextual styling to match offcanvas drawer and modal perfectly to core layout rules */
         .offcanvas { background-color: #121212; border-left: 1px solid #262626; width: 360px !important; }
         .modal-content { background-color: #121212; border: 1px solid #262626; }
+        
+        /* Loading overlay positioning */
+        .deck-wrapper {
+            position: relative;
+        }
+        .loading-overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(5, 5, 5, 0.85);
+            backdrop-filter: blur(4px);
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            transition: opacity 0.2s ease;
+        }
     </style>
 </head>
 <body class="bg-black text-white">
 
-    <!-- Top Navigation Branding Bar with Sidebar Drawer Trigger -->
-    <nav class="navbar navbar-dark border-bottom border-secondary sticky-top px-4" style="background-color: #000000;">
-        <span class="navbar-brand mb-0 h1 fw-bold tracking-wide" style="font-size: 1.3rem;">
-            CREATOR STUDIO <span class="text-white-50 fw-light">| Pipeline V2.2</span>
+    <!-- Responsive Top Navigation Branding Bar -->
+    <nav class="navbar navbar-dark border-bottom border-secondary sticky-top px-3 d-flex align-items-center justify-content-between" style="background-color: #000000; height: 56px;">
+        <span class="navbar-brand mb-0 h1 fw-bold tracking-wide text-truncate" style="font-size: 1.1rem; max-width: 70%;">
+            CREATOR STUDIO <span class="text-white-50 fw-light d-none d-sm-inline">| Pipeline V2.2</span>
         </span>
-        <button class="btn btn-outline-secondary btn-sm fw-bold px-3" type="button" data-bs-toggle="modal" data-bs-target="#pathConfigModal">
+        <button class="btn btn-outline-secondary btn-sm fw-bold px-3" style="height: 31px;" type="button" data-bs-toggle="modal" data-bs-target="#pathConfigModal">
             Settings
         </button>
     </nav>
 
     <!-- Main Dashboard Workspace Frame -->
     <div class="container-fluid py-4 px-4">
+        
+        <!-- Drive Status Warning Banner -->
+        <div id="driveWarningBanner" class="alert alert-danger d-none border-danger mb-4" role="alert" style="background-color: #1a080a; color: #ff8080;">
+            <div class="d-flex align-items-center justify-content-between">
+                <div>
+                    <strong>Target Path Disconnected:</strong> The selected Source Media Location Directory cannot be found. Please check your external hard drive connection or update paths in Settings.
+                </div>
+                <button class="btn btn-sm btn-outline-danger fw-bold" onclick="verifyActiveDriveStatus()">Re-scan Hardware</button>
+            </div>
+        </div>
+
         <div class="row g-4">
             
             <!-- Left Panel: Interactive Curation Deck -->
-            <div class="col-lg-7">
+            <div class="col-lg-7 col-12">
                 <div class="control-card p-4 h-100">
                     <h5 class="mb-4 text-white fw-bold tracking-sm">CURATION DECK</h5>
                     
@@ -70,9 +98,17 @@
                         </div>
                     </div>
 
-                    <!-- Gallery Interaction Grid Container -->
-                    <div class="gallery-wrapper rounded p-3 mb-4" style="background-color: #050505; min-height: 420px;">
-                        <div id="galleryContainer" class="d-flex flex-wrap gap-2 justify-content-start"></div>
+                    <!-- Gallery Interaction Grid Container with Overlay Layer -->
+                    <div class="deck-wrapper">
+                        <!-- Loading Spinner Overlay -->
+                        <div id="deckLoadingOverlay" class="loading-overlay d-none">
+                            <div class="spinner-border text-primary mb-3" role="status"></div>
+                            <span class="small text-white-50 fw-bold tracking-wide">SCANNING DIRECTORIES...</span>
+                        </div>
+                        
+                        <div class="gallery-wrapper rounded p-3 mb-4" style="background-color: #050505; min-height: 420px;">
+                            <div id="galleryContainer" class="d-flex flex-wrap gap-2 justify-content-start"></div>
+                        </div>
                     </div>
 
                     <!-- Layout Action Controls -->
@@ -84,7 +120,7 @@
             </div>
 
             <!-- Right Panel: Permanent Standby Deployment Queue -->
-            <div class="col-lg-5">
+            <div class="col-lg-5 col-12">
                 <div class="control-card p-4 h-100">
                     <h5 class="mb-4 text-white fw-bold tracking-sm">STANDBY PIPELINE QUEUE</h5>
                     <div id="queueContainer" class="overflow-y-auto" style="max-height: 580px; padding-right: 4px;">
