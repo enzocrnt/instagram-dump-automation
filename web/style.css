@@ -18,7 +18,7 @@ body {
 }
 .custom-input:focus {
     background-color: #1c1c1c;
-    border-color: #555555;
+    border-color: #0095F6;
     color: #fff;
     box-shadow: none;
 }
@@ -61,6 +61,26 @@ body {
     font-weight: bold;
     pointer-events: none;
     letter-spacing: 0.05em;
+    z-index: 2;
+}
+
+/* Video Badge Overlays */
+.video-badge {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background-color: rgba(0, 0, 0, 0.75);
+    color: #ffffff;
+    font-size: 0.65rem;
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-weight: 500;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    backdrop-filter: blur(4px);
+    z-index: 1;
 }
 
 .queue-card {

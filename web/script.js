@@ -20,12 +20,26 @@ document.getElementById('btnSaveConfig').addEventListener('click', commitPathsTo
 document.getElementById('btnBrowseSource').addEventListener('click', () => selectDirectory('source'));
 document.getElementById('btnBrowseVault').addEventListener('click', () => selectDirectory('vault'));
 
+// FIXED: Removed resetMediaTypeFilter() from select modifications
 document.getElementById('yearSelect').addEventListener('change', () => { updateAdaptiveDayLimits(); triggerPoolReroll(false); });
 document.getElementById('monthSelect').addEventListener('change', () => { updateAdaptiveDayLimits(); triggerPoolReroll(false); });
-document.getElementById('daySelect').addEventListener('change', () => triggerPoolReroll(false));
+document.getElementById('daySelect').addEventListener('change', () => { triggerPoolReroll(false); });
 
 document.getElementById('btnNextDate').addEventListener('click', () => shiftDateStep(1));
 document.getElementById('btnPrevDate').addEventListener('click', () => shiftDateStep(-1));
+
+// Client Side Dropdown Render Engine Filter Logic
+function filterMediaGrid(filterValue) {
+    const mediaItems = document.querySelectorAll('#galleryContainer .thumb-block');
+    mediaItems.forEach(item => {
+        const itemType = item.getAttribute('data-type');
+        if (filterValue === 'all' || itemType === filterValue) {
+            item.classList.remove('d-none');
+        } else {
+            item.classList.add('d-none');
+        }
+    });
+}
 
 // Adaptive Calendar Bounds Engine
 function updateAdaptiveDayLimits() {
@@ -52,6 +66,7 @@ function updateAdaptiveDayLimits() {
     daySelect.value = Math.min(currentVal, maxDays);
 }
 
+// FIXED: Removed resetMediaTypeFilter() step entirely from calendar navigation jumps
 function shiftDateStep(direction) {
     const daySelect = document.getElementById('daySelect');
     let day = parseInt(daySelect.value);
@@ -180,33 +195,65 @@ function renderGalleryDeckGrid() {
     container.innerHTML = '';
     
     if (currentPool.length === 0) {
-        container.innerHTML = `<p class="text-white-50 small font-italic p-3 m-0">No photos found matching this date query.</p>`;
+        container.innerHTML = `<p class="text-white-50 small font-italic p-3 m-0">No media assets found matching this date query.</p>`;
         return;
     }
 
+    // Capture whatever media filter selection is active right now
+    const activeFilter = document.getElementById('mediaTypeSelect').value;
+
     currentPool.forEach((item, index) => {
+        const ext = item.name.split('.').pop().toLowerCase();
+        const isVideo = ['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(ext);
+        const mediaType = isVideo ? 'video' : 'photo';
+
         const wrapper = document.createElement('div');
         wrapper.className = `thumb-block overflow-hidden ${item.locked ? 'locked' : ''}`;
         wrapper.setAttribute('draggable', 'true');
         wrapper.setAttribute('data-index', index);
+        wrapper.setAttribute('data-type', mediaType);
         
+        // FIXED: Applies your persistent filter straight away as new grid items are injected
+        if (activeFilter !== 'all' && mediaType !== activeFilter) {
+            wrapper.classList.add('d-none');
+        }
+
         wrapper.addEventListener('dragstart', handleDragStart);
         wrapper.addEventListener('dragover', handleDragOver);
         wrapper.addEventListener('drop', handleDrop);
         wrapper.addEventListener('dragend', handleDragEnd);
         
         wrapper.addEventListener('click', (e) => {
-            if (e.target.tagName === 'IMG' || e.target === wrapper) {
+            if (e.target.tagName === 'IMG' || e.target.tagName === 'VIDEO' || e.target === wrapper) {
                 item.locked = !item.locked;
                 renderGalleryDeckGrid();
             }
         });
         
-        const img = document.createElement('img');
-        img.src = `staging/${item.name}`;
-        img.style.width = '100%'; img.style.height = '100%'; img.style.objectFit = 'cover';
-        
-        wrapper.appendChild(img);
+        if (isVideo) {
+            const video = document.createElement('video');
+            video.src = `staging/${item.name}`;
+            video.muted = true;
+            video.loop = true;
+            video.style.width = '100%'; video.style.height = '100%'; video.style.objectFit = 'cover';
+            
+            wrapper.addEventListener('mouseenter', () => video.play().catch(()=>{}));
+            wrapper.addEventListener('mouseleave', () => { video.pause(); video.currentTime = 0; });
+            
+            wrapper.appendChild(video);
+
+            if (!item.locked) {
+                const videoBadge = document.createElement('div');
+                videoBadge.className = 'video-badge';
+                videoBadge.innerHTML = `<i class="fa-solid fa-video"></i> Video`;
+                wrapper.appendChild(videoBadge);
+            }
+        } else {
+            const img = document.createElement('img');
+            img.src = `staging/${item.name}`;
+            img.style.width = '100%'; img.style.height = '100%'; img.style.objectFit = 'cover';
+            wrapper.appendChild(img);
+        }
         
         if (item.locked) {
             const badge = document.createElement('div');
@@ -273,7 +320,6 @@ async function saveToStandbyQueue() {
     shiftDateStep(1); 
 }
 
-// Fully Responsive Mobile-Adaptive Component Renderer
 function renderStandbyQueue() {
     const container = document.getElementById('queueContainer');
     container.innerHTML = '';
@@ -312,7 +358,6 @@ async function syncCaptionText(folderKey, value) {
     const batch = standbyBatches.find(b => b.folderKey === folderKey);
     if (batch) {
         batch.caption = value;
-        // Push modification back to system storage file asynchronously
         await eel.python_sync_caption_file(folderKey, value)();
     }
 }

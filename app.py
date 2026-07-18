@@ -91,7 +91,6 @@ def python_open_batch_in_explorer(folder_name):
 
 @eel.expose
 def python_sync_caption_file(folder_name, caption_text):
-    """Overwrites persistent string log values within target directory payload."""
     config = load_config()
     vault_base = config.get("vault_dir")
     batch_vault_path = os.path.join(vault_base, folder_name)
@@ -105,7 +104,8 @@ def python_sync_caption_file(folder_name, caption_text):
     return False
 
 def background_recursive_file_search(archive_base, target_year_str, target_month_str, target_day_str):
-    valid_extensions = ('.jpg', '.jpeg', '.png')
+    # EXTENDED: Video files appended to extension criteria loop mapping
+    valid_extensions = ('.jpg', '.jpeg', '.png', '.mp4', '.mov', '.avi', '.mkv', '.webm')
     matched_file_paths = []
 
     for root_dir, _, files in os.walk(archive_base):
@@ -226,7 +226,6 @@ def python_save_to_standby(year, month, day, ordered_filenames):
         
     os.makedirs(batch_vault_path, exist_ok=True)
     
-    # Generate persistent default text block
     default_caption = f"{month[:3]}. {int(day)}, {year}"
     with open(os.path.join(batch_vault_path, "caption.txt"), "w", encoding="utf-8") as f:
         f.write(default_caption)
@@ -273,7 +272,10 @@ def python_load_existing_staged_batches():
     for folder_path in glob.glob(os.path.join(vault_base, "STAGED_*")):
         if os.path.isdir(folder_path):
             folder_name = os.path.basename(folder_path)
-            file_count = len(glob.glob(os.path.join(folder_path, "*.jpg"))) + len(glob.glob(os.path.join(folder_path, "*.png")))
+            
+            # EXTENDED: Scans for extensions inside saved batches folder maps
+            all_files = os.listdir(folder_path)
+            file_count = sum(1 for f in all_files if f.lower().endswith(('.jpg', '.jpeg', '.png', '.mp4', '.mov', '.avi', '.mkv', '.webm')))
             
             try:
                 date_part = folder_name.split("STAGED_")[1].split("_")[0]
@@ -282,7 +284,6 @@ def python_load_existing_staged_batches():
             except Exception:
                 date_display = "Unknown Date"
             
-            # Read saved caption string if file metadata exists
             saved_caption = date_display
             caption_file_path = os.path.join(folder_path, "caption.txt")
             if os.path.exists(caption_file_path):
@@ -306,14 +307,19 @@ def python_upload_batch(folder_name, caption):
     vault_base = config.get("vault_dir")
     
     batch_vault_path = os.path.join(vault_base, folder_name)
-    absolute_image_paths = sorted(glob.glob(os.path.join(batch_vault_path, "*.jpg")) + glob.glob(os.path.join(batch_vault_path, "*.png")))
+    all_files = sorted(os.listdir(batch_vault_path))
+    absolute_media_paths = [
+        os.path.join(batch_vault_path, f) for f in all_files 
+        if f.lower().endswith(('.jpg', '.jpeg', '.png', '.mp4', '.mov', '.avi', '.mkv', '.webm'))
+    ]
     
-    if not absolute_image_paths:
+    if not absolute_media_paths:
         return False
 
     print(f"\n--- EXECUTION DEPLOYMENT TRIGGERED FOR {folder_name} ---")
     try:
-        upload_success = execute_browser_upload(absolute_image_paths, caption)
+        # Note: Ensure your underlying execute_browser_upload method supports video inputs via Selenium handles
+        upload_success = execute_browser_upload(absolute_media_paths, caption)
         if upload_success:
             new_folder_name = folder_name.replace("STAGED_", "POSTED_")
             posted_vault_path = os.path.join(vault_base, new_folder_name)
@@ -331,7 +337,6 @@ if __name__ == "__main__":
     os.makedirs(STAGING_DIR, exist_ok=True)
     os.makedirs(initial_config["vault_dir"], exist_ok=True)
     
-    # Direct fullscreen window implementation on bootup execution
     eel.start(
         'index.html', 
         mode='chrome', 
